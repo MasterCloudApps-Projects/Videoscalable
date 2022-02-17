@@ -4,28 +4,18 @@ const https = require('https');
 const express = require('express');
 const socketIO = require('socket.io');
 const config = require('./config');
+const { RoomManager, Room } = require('./lib/RoomManager');
 
 // Global variables
 let webServer;
 let socketServer;
 let expressApp;
-let producer;
-let consumer;
-let producerTransport;
-let consumerTransport;
-let mediasoupRouter; 
-
-//Session:
-// - Router
-// - transports: Map<String, [producerTransport, consumerTransport]
-// - producers: Map<String, Producer> //Ana, Stefano, Mica
-// - consumers: Map<String, Map<String,Consumer>>
-//      Ana: Mica, Stefano
-//      Mica: Ana, Stefano
-//      Stefano: Ana, Mica
+let mediasoupRouter;
+let defaultRoom = null;
 
 (async () => {
   try {
+    RoomManager.initRooms();
     await runExpressApp();
     await runWebServer();
     await runSocketServer();
@@ -89,15 +79,32 @@ async function runSocketServer() {
   });
 
   socketServer.on('connection', (socket) => {
-    console.log('client connected');
+    console.log('client connected socketId=%s', socket.id);
+    const rooms = socketServer.sockets.adapter.rooms;
 
-    socket.on('joinRoom', (data) => {
-      let participantId = UUID.v1();
-      socket.join(data.roomId);
-      socket.emit('newParticipant', { participantId: participantId });
+    socket.on('joinRoom', async (data) => {
+      const roomName = data.roomName;
+      const room = RoomManager.getRoom(roomName);
+
+      if(room) {
+        console.log('Joining existing room %s', roomName);
+      } else {
+        createRoom(roomName);
+        console.log('Creating and joining room %s', roomName);
+      }
+
+      await socket.join(roomName);
+      socket.roomName = roomName;
+    });
+
+    socket.on('fetchRooms', () => {
+      console.log('fetchRooms is being called');
+      socket.emit('roomsFetched', { availableRooms: RoomManager.getRoomsNames() });
     });
 
     socket.on('disconnect', () => {
+      const roomName = socket.roomName;
+      socket.leave(roomName);
       console.log('client disconnected');
     });
 
@@ -110,9 +117,13 @@ async function runSocketServer() {
     });
 
     socket.on('createProducerTransport', async (data, callback) => {
+      const roomName = socket.roomName;
+
+      console.log('createProducerTransport room=%s', roomName);
+
       try {
         const { transport, params } = await createWebRtcTransport();
-        producerTransport = transport;
+        addProducerTransport(roomName, socket.id, transport);
         callback(params);
       } catch (err) {
         console.error(err);
@@ -121,9 +132,13 @@ async function runSocketServer() {
     });
 
     socket.on('createConsumerTransport', async (data, callback) => {
+      const roomName = socket.roomName;
+      console.log('createConsumerTransport room=%s', roomName);
+
       try {
         const { transport, params } = await createWebRtcTransport();
-        consumerTransport = transport;
+        addConsumerTransport(roomName, socket.id, transport);
+
         callback(params);
       } catch (err) {
         console.error(err);
@@ -131,30 +146,63 @@ async function runSocketServer() {
       }
     });
 
+    socket.on('getRoomProducers', async (data, callback) => {
+      const roomName = socket.roomName;
+      const clientId = data.socketId;
+
+      try {
+        const producers = getRemoteProducerIds(roomName, clientId);
+        callback(producers);
+      } catch (err) {
+        console.error(err);
+        callback({ error: err.message });
+      }
+    });
+
     socket.on('connectProducerTransport', async (data, callback) => {
-      await producerTransport.connect({ dtlsParameters: data.dtlsParameters });
+      const roomName = socket.roomName;
+      const transport = getProducerTransport(roomName, socket.id);
+      await transport.connect({ dtlsParameters: data.dtlsParameters });
       callback();
     });
 
     socket.on('connectConsumerTransport', async (data, callback) => {
-      await consumerTransport.connect({ dtlsParameters: data.dtlsParameters });
+      const roomName = socket.roomName;
+      const transport = getConsumerTransport(roomName, socket.id);
+      await transport.connect({ dtlsParameters: data.dtlsParameters });
       callback();
     });
 
     socket.on('produce', async (data, callback) => {
-      const {kind, rtpParameters} = data;
-      producer = await producerTransport.produce({ kind, rtpParameters });
-      callback({ id: producer.id });
+      const roomName = socket.roomName;
+      const { kind, rtpParameters } = data;
+      const transport = getProducerTransport(roomName, socket.id);
+      const producer = await transport.produce({ kind, rtpParameters });
+      addProducer(roomName, socket.id, producer);
+      
+      console.log('new producer in room=%s', roomName);
+      socket.broadcast.to(roomName).emit('newProducer', { socketId: socket.id, producerId: producer.id, kind: producer.kind });
 
-      // inform clients about new producer
-      socket.broadcast.emit('newProducer');
+      callback({ id: producer.id });
     });
 
     socket.on('consume', async (data, callback) => {
-      callback(await createConsumer(producer, data.rtpCapabilities));
+      const roomName = socket.roomName;
+      const localId = socket.id;
+      const remoteId = data.producerId;
+      const transport = getConsumerTransport(roomName, localId);
+      const producer = getProducer(roomName, remoteId);
+    
+      const { consumer, params } = await createConsumer(roomName, transport, producer, data.rtpCapabilities);
+      addConsumer(roomName, localId, remoteId, consumer);
+      callback(params);
     });
 
     socket.on('resume', async (data, callback) => {
+      const roomName = socket.roomName;
+      const remoteId = data.producerId;
+
+      const consumer = getConsumer(roomName, socket.id, remoteId);
       await consumer.resume();
       callback();
     });
@@ -176,6 +224,8 @@ async function runMediasoupWorker() {
 
   const mediaCodecs = config.mediasoup.router.mediaCodecs;
   mediasoupRouter = await worker.createRouter({ mediaCodecs });
+
+  defaultRoom = createRoom('defaultRoom');
 }
 
 async function createWebRtcTransport() {
@@ -208,37 +258,120 @@ async function createWebRtcTransport() {
   };
 }
 
-async function createConsumer(producer, rtpCapabilities) {
-  if (!mediasoupRouter.canConsume(
-    {
+function coalesceRoom(roomName) {
+  return roomName ? RoomManager.getRoom(roomName) : defaultRoom;
+}
+
+function getProducerTransport(roomName, id) {
+  console.log('getProducerTransport room=%s', roomName);
+  return coalesceRoom(roomName).getProducerTransport(id);
+}
+
+function addProducerTransport(roomName, id, transport) {
+  coalesceRoom(roomName).addProducerTransport(id, transport);
+  console.log('addProducerTransport room=%s', roomName);
+}
+
+function deleteProducerTransport(roomName, id) {
+  coalesceRoom(roomName).deleteProducerTransport(id);
+  console.log('deleteProducerTransport room=%s', roomName);
+}
+
+function getProducer(roomName, id) {
+  console.log('getProducer room=%s clientId=%s', roomName, id);
+  return coalesceRoom(roomName).getProducer(id);
+}
+
+function getRemoteProducerIds(roomName, clientId) {
+  console.log('getRemoteProducerIds room=%s clientId=%s', roomName, clientId);
+  return coalesceRoom(roomName).getRemoteProducerIds(clientId);
+}
+
+function addProducer(roomName, id, producer) {
+  coalesceRoom(roomName).addProducer(id, producer);
+  console.log('addProducer room=%s id=%s', roomName, id);
+}
+
+function deleteProducer(roomName, id) {
+  coalesceRoom(roomName).deleteProducer(id);
+  console.log('deleteProducer room=%s id=%s', roomName, id);
+}
+
+function getConsumerTransport(roomName, id) {
+  console.log('getConsumerTransport room=%s id=%s', roomName, id);
+  return coalesceRoom(roomName).getConsumerTransport(id);
+}
+
+function addConsumerTransport(roomName, id, transport) {
+  coalesceRoom(roomName).addConsumerTransport(id, transport);
+  console.log('addConsumerTransport room=%s id=%s', roomName, id);
+}
+
+function deleteConsumerTransport(roomName, id) {
+  coalesceRoom(roomName).deleteConsumerTransport(id);
+  console.log('deleteConsumerTransport room=%s id=%s', roomName, id);
+}
+
+function getConsumer(roomName, localId, remoteId) {
+  console.log('getConsumer room=%s localId=%s remoteId=%s', roomName, localId, remoteId);
+  return coalesceRoom(roomName).getConsumer(localId, remoteId);
+}
+
+function addConsumer(roomName, localId, remoteId, consumer) {
+  coalesceRoom(roomName).addConsumer(localId, remoteId, consumer);
+  console.log('addConsumer room=%s localId=%s remoteId=%s', roomName, localId, remoteId);
+}
+
+function deleteConsumer(roomName, localId, remoteId) {
+  coalesceRoom(roomName).deleteConsumer(localId, remoteId);
+  console.log('deleteConsumer room=%s localId=%s remoteId=%s', roomName, localId, remoteId);
+}
+
+function deleteConsumerSet(roomName, localId) {
+  coalesceRoom(roomName).deleteConsumerSet(localId);
+  console.log('deleteConsumerSet room=%s localId=%s', roomName, localId);
+}
+
+async function createConsumer(roomName, transport, producer, rtpCapabilities) {
+
+  if(!mediasoupRouter.canConsume({
       producerId: producer.id,
-      rtpCapabilities,
+      rtpCapabilities
     })
-  ) {
-    console.error('can not consume');
-    return;
-  }
-  try {
-    consumer = await consumerTransport.consume({
-      producerId: producer.id,
-      rtpCapabilities,
-      paused: producer.kind === 'video',
-    });
-  } catch (error) {
-    console.error('consume failed', error);
+  ){
+    console.error('Cannot consume');
     return;
   }
 
-  if (consumer.type === 'simulcast') {
-    await consumer.setPreferredLayers({ spatialLayer: 2, temporalLayer: 2 });
+  let consumer = null;
+
+  try {
+    consumer = await transport.consume({
+      producerId: producer.id,
+      rtpCapabilities,
+      paused: producer.kind === 'video'
+    });
+  } catch (error) {
+    console.error('createConsumer failed');
+    return;
   }
 
   return {
-    producerId: producer.id,
-    id: consumer.id,
-    kind: consumer.kind,
-    rtpParameters: consumer.rtpParameters,
-    type: consumer.type,
-    producerPaused: consumer.producerPaused
+    consumer,
+    params: {
+      producerId: producer.id,
+      id: consumer.id,
+      kind: consumer.kind,
+      rtpParameters: consumer.rtpParameters,
+      type: consumer.type,
+      producerPaused: consumer.producerPaused
+    }
   };
+}
+
+function createRoom(roomName) {
+  const room = new Room(roomName);
+  room.router = mediasoupRouter;
+  RoomManager.addRoom(room, roomName);
+  return room;
 }
