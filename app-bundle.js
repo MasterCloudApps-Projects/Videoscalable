@@ -11,33 +11,48 @@ let socket;
 let producer;
 
 const $ = document.querySelector.bind(document);
-const $fsPublish = $('#fs_publish');
-const $fsSubscribe = $('#fs_subscribe');
-const $btnConnect = $('#btn_connect');
+const $_all = document.querySelectorAll.bind(document);
+const $fsPublish = $_all('#fs_publish button');
+const $fsSubscribe = $_all('#fs_subscribe button');
 const $btnWebcam = $('#btn_webcam');
 const $btnScreen = $('#btn_screen');
 const $btnSubscribe = $('#btn_subscribe');
-const $chkSimulcast = $('#chk_simulcast');
-const $txtConnection = $('#connection_status');
+const $btnCreateRoom = $('#create_new_room');
 const $txtWebcam = $('#webcam_status');
 const $txtScreen = $('#screen_status');
 const $txtSubscription = $('#sub_status');
+const $txtCreatedRoom = $('#txt_created_room');
+const $txtLocalDefaultEmpty = $('#local-default-empty-text');
+const $txtRemoteDefaultEmpty = $('#remote-default-empty-text');
+const $roomsList = $('#rooms_list');
+const $inputRoomName = $('#input_room_name');
+const $localDiv = $('#local');
+const $remoteDiv = $('#remote');
 let $txtPublish;
 
-$btnConnect.addEventListener('click', connect);
 $btnWebcam.addEventListener('click', publish);
 $btnScreen.addEventListener('click', publish);
 $btnSubscribe.addEventListener('click', subscribe);
 
-if (typeof navigator.mediaDevices.getDisplayMedia === 'undefined') {
+// Connect directly when window is ready
+window.onload = connect();
+
+// @ts-ignore
+if (!navigator.mediaDevices.getDisplayMedia) {
   $txtScreen.innerHTML = 'Not supported';
   $btnScreen.disabled = true;
 }
 
-async function connect() {
-  $btnConnect.disabled = true;
-  $txtConnection.innerHTML = 'Connecting...';
+async function tryFetchingRooms() {
+  if(socket) {
+    socket.emit('fetchRooms');
+  } else {
+    console.log('Trying to fetch rooms...');
+    setTimeout(() => tryFetchingRooms(), 2000);
+  }
+}
 
+async function connect() {
   const opts = {
     path: '/server',
     transports: ['websocket'],
@@ -48,30 +63,32 @@ async function connect() {
   socket.request = socketPromise(socket);
 
   socket.on('connect', async () => {
-    $txtConnection.innerHTML = 'Connected';
-    $fsPublish.disabled = false;
-    $fsSubscribe.disabled = false;
-
     const data = await socket.request('getRouterRtpCapabilities');
     await loadDevice(data);
+    await tryFetchingRooms();
+  });
+
+  socket.on('roomsFetched', (data) => {
+    displayRooms(data);
   });
 
   socket.on('disconnect', () => {
-    $txtConnection.innerHTML = 'Disconnected';
-    $btnConnect.disabled = false;
-    $fsPublish.disabled = true;
-    $fsSubscribe.disabled = true;
+    console.log(data);
+    setAllButtonsStatusFromList($fsPublish, true);
+    setAllButtonsStatusFromList($fsSubscribe, true);
   });
 
   socket.on('connect_error', (error) => {
     console.error('could not connect to %s%s (%s)', serverUrl, opts.path, error.message);
-    $txtConnection.innerHTML = 'Connection failed';
-    $btnConnect.disabled = false;
   });
 
   socket.on('newProducer', () => {
-    $fsSubscribe.disabled = false;
+    setAllButtonsStatusFromList($fsSubscribe, false);
   });
+
+  socket.on('newParticipant', (data) => {
+    console.log(data);
+  }); 
 }
 
 async function loadDevice(routerRtpCapabilities) {
@@ -93,6 +110,7 @@ async function publish(e) {
     forceTcp: false,
     rtpCapabilities: device.rtpCapabilities,
   });
+
   if (data.error) {
     console.error(data.error);
     return;
@@ -108,12 +126,14 @@ async function publish(e) {
   transport.on('produce', async ({ kind, rtpParameters }, callback, errback) => {
     try {
       const { id } = await socket.request('produce', {
+        socketId: socket.id,
         transportId: transport.id,
         kind,
         rtpParameters,
       });
       callback({ id });
     } catch (err) {
+      console.error(err);
       errback(err);
     }
   });
@@ -121,23 +141,25 @@ async function publish(e) {
   transport.on('connectionstatechange', (state) => {
     switch (state) {
       case 'connecting':
-        $txtPublish.innerHTML = 'publishing...';
-        $fsPublish.disabled = true;
-        $fsSubscribe.disabled = true;
+        setAllButtonsStatusFromList($fsPublish, true);
+        setAllButtonsStatusFromList($fsSubscribe, true);
+        showToast('info', 'Publish' ,'Publishing...');
       break;
 
       case 'connected':
-        document.querySelector('#local_video').srcObject = stream;
-        $txtPublish.innerHTML = 'published';
-        $fsPublish.disabled = true;
-        $fsSubscribe.disabled = false;
+        const newVideo = createVideo(stream);
+        $txtLocalDefaultEmpty.classList.add('invisible');
+        $localDiv.append(newVideo);
+        setAllButtonsStatusFromList($fsPublish, true);
+        setAllButtonsStatusFromList($fsSubscribe, false);
+        showToast('info', 'Publish', 'You are now publishing!');
       break;
 
       case 'failed':
         transport.close();
-        $txtPublish.innerHTML = 'failed';
-        $fsPublish.disabled = false;
-        $fsSubscribe.disabled = true;
+        setAllButtonsStatusFromList($fsPublish, false);
+        setAllButtonsStatusFromList($fsSubscribe, true);
+        showToast('error', 'Connection status', 'An error happened while connecting');
       break;
 
       default: break;
@@ -149,16 +171,16 @@ async function publish(e) {
     stream = await getUserMedia(transport, isWebcam);
     const track = stream.getVideoTracks()[0];
     const params = { track };
-    if ($chkSimulcast.checked) {
-      params.encodings = [
-        { maxBitrate: 100000 },
-        { maxBitrate: 300000 },
-        { maxBitrate: 900000 },
-      ];
-      params.codecOptions = {
-        videoGoogleStartBitrate : 1000
-      };
-    }
+    // if ($chkSimulcast.checked) {
+    //   params.encodings = [
+    //     { maxBitrate: 100000 },
+    //     { maxBitrate: 300000 },
+    //     { maxBitrate: 900000 },
+    //   ];
+    //   params.codecOptions = {
+    //     videoGoogleStartBitrate : 1000
+    //   };
+    // }
     producer = await transport.produce(params);
   } catch (err) {
     $txtPublish.innerHTML = 'failed';
@@ -186,52 +208,69 @@ async function getUserMedia(transport, isWebcam) {
 async function subscribe() {
   const data = await socket.request('createConsumerTransport', {
     forceTcp: false,
+    socketId: socket.id
   });
+
+  const producers = await socket.request('getRoomProducers', {
+    socketId: socket.id
+  });
+
   if (data.error) {
     console.error(data.error);
     return;
   }
 
-  const transport = device.createRecvTransport(data);
-  transport.on('connect', ({ dtlsParameters }, callback, errback) => {
-    socket.request('connectConsumerTransport', {
-      transportId: transport.id,
-      dtlsParameters
-    })
-      .then(callback)
-      .catch(errback);
+  producers.forEach(producer => {
+    const transport = device.createRecvTransport(data);
+
+    transport.on('connect', ({ dtlsParameters }, callback, errback) => {
+      socket.request('connectConsumerTransport', {
+        transportId: transport.id,
+        dtlsParameters
+      })
+        .then(callback)
+        .catch(errback);
+    });
+
+    transport.on('connectionstatechange', async (state) => {
+      switch (state) {
+        case 'connecting':
+          $txtSubscription.innerHTML = 'subscribing...';
+          setAllButtonsStatusFromList($fsSubscribe, true);
+          break;
+
+        case 'connected':
+          const newVideo = await createVideoAndAwait(stream);
+          $txtRemoteDefaultEmpty.classList.add('invisible');
+          $remoteDiv.append(newVideo);
+          await socket.request('resume', { producerId: producer });
+          $txtSubscription.innerHTML = 'subscribed';
+          setAllButtonsStatusFromList($fsSubscribe, true);
+          break;
+
+        case 'failed':
+          transport.close();
+          $txtSubscription.innerHTML = 'failed';
+          setAllButtonsStatusFromList($fsSubscribe, false);
+          break;
+
+        default: break;
+      }
+    });
+
+    const stream = consume(transport, producer);
   });
-
-  transport.on('connectionstatechange', async (state) => {
-    switch (state) {
-      case 'connecting':
-        $txtSubscription.innerHTML = 'subscribing...';
-        $fsSubscribe.disabled = true;
-        break;
-
-      case 'connected':
-        document.querySelector('#remote_video').srcObject = await stream;
-        await socket.request('resume');
-        $txtSubscription.innerHTML = 'subscribed';
-        $fsSubscribe.disabled = true;
-        break;
-
-      case 'failed':
-        transport.close();
-        $txtSubscription.innerHTML = 'failed';
-        $fsSubscribe.disabled = false;
-        break;
-
-      default: break;
-    }
-  });
-
-  const stream = consume(transport);
 }
 
-async function consume(transport) {
+async function consume(transport, producer) {
   const { rtpCapabilities } = device;
-  const data = await socket.request('consume', { rtpCapabilities });
+  const consumer = await socket.request('consume', { rtpCapabilities, socketId: socket.id, producerId: producer });
+  const stream = await createStreamFromConsumerData(consumer, transport);
+
+  return stream;
+}
+
+async function createStreamFromConsumerData(data, transport) {
   const {
     producerId,
     id,
@@ -250,6 +289,92 @@ async function consume(transport) {
   const stream = new MediaStream();
   stream.addTrack(consumer.track);
   return stream;
+}
+
+function displayRooms({ availableRooms }) {
+  console.log(availableRooms);
+  $roomsList.innerHTML = availableRooms.map((room) => 
+    `<li>${room} <button id="btn_connect_room-${room}" class="btn_connect_room btn btn-primary btn-sm" room-id="${room}" room-name="${room}"><i class="bi bi-door-open-fill"></i> Connect</button></li>`);
+  
+  availableRooms.map((room) => {
+    $(`#btn_connect_room-${room}`).addEventListener('click', joinRoom);
+  }); 
+}
+
+async function joinRoom(event) {
+  const roomId = event.target.getAttribute('room-id');
+  const roomName = event.target.getAttribute('room-name');
+  const roomButton = $(`#btn_connect_room-${roomId}`);
+
+  if(socket) {
+    socket.emit('joinRoom', { roomId, roomName, socketId: socket.id  });
+    setAllButtonsStatusFromList($fsPublish, false);
+    setAllButtonsStatusFromList($fsSubscribe, false);
+    toggleLateralMenu();
+    showToast('success', 'Connected', `You have joined room <b>${roomName}</b>`);
+    roomButton.disabled = true;
+  } else {
+    console.error(`Socket is not available and cannot connect to room ${roomName}`);
+    showToast('error', 'Could not connect', `An error happened while trying to join the room <b>${roomName}</b>`);
+  }
+  
+}
+
+function setAllButtonsStatusFromList (buttonsList, disabled) {
+  [...buttonsList].forEach(button => button.disabled = disabled);
+}
+
+function showToast(status, title, message) {
+  const toastBadgeClass = {
+    'success': 'badge bg-success',
+    'error': 'badge bg-danger',
+    'info': 'badge bg-info'
+  };
+  const toastLiveExample = $('#liveToast');
+  const toastStatus = $('#toast-status');
+  const toastTitle = $('#toast-title');
+  const toastBody = $('#toast-body');
+
+  toastStatus.classList = toastBadgeClass[status];
+  toastStatus.innerHTML = status;
+  toastTitle.innerHTML = ' ' + title;
+  toastBody.innerHTML = ' ' + message;
+  const toast = new bootstrap.Toast(toastLiveExample)
+  toast.show();
+}
+
+function toggleLateralMenu() {
+  const lateralMenu = $('#offcanvasRooms');
+  const lateralMenuBackdrop = $('.offcanvas-backdrop');
+  const isLateralMenuActive = lateralMenu.classList.contains('show');
+  
+  if(isLateralMenuActive) {
+    lateralMenu.classList.remove("show");
+    lateralMenuBackdrop.classList.remove("show");
+  } else {
+    lateralMenu.classList.add("show");
+    lateralMenuBackdrop.classList.add("show");
+  }
+}
+
+async function createVideoAndAwait(stream) {
+  const newVideo = createVideoElement();
+  newVideo.srcObject = await stream;
+  return newVideo;
+}
+
+function createVideo(stream) {
+  const newVideo = createVideoElement();
+  newVideo.srcObject = stream;
+  return newVideo;
+}
+
+function createVideoElement() {
+  const newVideo = document.createElement('video');
+  newVideo.setAttribute('controls', true);
+  newVideo.setAttribute('autoplay', true);
+  newVideo.setAttribute('playsinline', true);
+  return newVideo;
 }
 
 },{"./config":2,"./lib/socket.io-promise":3,"mediasoup-client":64,"socket.io-client":79}],2:[function(require,module,exports){
