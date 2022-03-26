@@ -103,9 +103,23 @@ async function runSocketServer() {
     });
 
     socket.on('disconnect', () => {
-      const roomName = socket.roomName;
-      socket.leave(roomName);
-      console.log('client disconnected');
+      const clientId = socket.id;
+
+      if(clientId) {
+        const roomName = socket.roomName;
+        const room = RoomManager.getRoom(roomName);
+        const producerTransport = room?.getProducerTransport(socket.id);
+        const consumerTransport = room?.getConsumerTransport(socket.id);
+        
+        if(producerTransport)
+          producerTransport.close();
+        if(consumerTransport)
+          consumerTransport.close();
+
+        socket.leave(roomName);
+
+        console.log(`client ${socket.id} disconnected`);
+      }
     });
 
     socket.on('connect_error', (err) => {
@@ -124,6 +138,19 @@ async function runSocketServer() {
       try {
         const { transport, params } = await createWebRtcTransport();
         addProducerTransport(roomName, socket.id, transport);
+
+        // Attach observer
+        transport.observer.on('close', () => {
+          const id = socket.id;
+          const producer = getProducer(roomName, id);
+          if (producer) {
+            producer.close();
+            deleteProducer(roomName, id);
+          }
+          deleteProducerTransport(roomName, id);
+          console.log('[Observer API] Producer transport closed');
+        });
+
         callback(params);
       } catch (err) {
         console.error(err);
@@ -138,6 +165,14 @@ async function runSocketServer() {
       try {
         const { transport, params } = await createWebRtcTransport();
         addConsumerTransport(roomName, socket.id, transport);
+
+        // Attach observer
+        transport.observer.on('close', () => {
+          const id = socket.id;
+          deleteConsumerSet(roomName, id);
+          deleteConsumerTransport(roomName, id);
+          console.log('[Observer API] Consumer transport closed');
+        });
 
         callback(params);
       } catch (err) {
@@ -179,6 +214,11 @@ async function runSocketServer() {
       const transport = getProducerTransport(roomName, socket.id);
       const producer = await transport.produce({ kind, rtpParameters });
       addProducer(roomName, socket.id, producer);
+
+      // Attach observer
+      producer.observer.on('close', () => {
+        console.log('[Observer API] Producer closed');
+      })
       
       console.log('new producer in room=%s', roomName);
       socket.broadcast.to(roomName).emit('newProducer', { socketId: socket.id, producerId: producer.id, kind: producer.kind });
@@ -195,6 +235,18 @@ async function runSocketServer() {
     
       const { consumer, params } = await createConsumer(roomName, transport, producer, data.rtpCapabilities);
       addConsumer(roomName, localId, remoteId, consumer);
+
+      // Attach observer
+      consumer.observer.on('close', () => {
+        console.log('[Observer API] Consumer closed');
+      });
+  
+      consumer.on('producerclose', () => {
+        consumer.close();
+        deleteConsumer(roomName, localId, remoteId);
+
+        // TODO: Notify client using websocket
+      });
       callback(params);
     });
 

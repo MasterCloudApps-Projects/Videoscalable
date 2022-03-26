@@ -8,10 +8,36 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.0/font/bootstrap-icons.css">
   <link rel="icon" type="image/png" href="mediasoup.png" />
   <link rel="stylesheet" href="./css/index.css">
-  <title>Mediasoup Sample App</title>
+  <title>Videoscalable</title>
 </head>
 <body>
   <div class="container">
+    <div class="modal fade" id="createRoomModal" tabindex="-1" aria-labelledby="createRoomModalLabel" aria-hidden="true">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title" id="exampleModalLabel">Create room</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+          </div>
+          <div class="modal-body">
+            <form>
+              <div class="mb-3">
+                <label for="recipient-name" class="col-form-label">Name:</label>
+                <input type="text" class="form-control" id="room-name">
+              </div>
+              <div class="mb-3">
+                <label for="message-text" class="col-form-label">Description:</label>
+                <textarea class="form-control" id="room-description"></textarea>
+              </div>
+            </form>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+            <button type="button" class="btn btn-primary">Create</button>
+          </div>
+        </div>
+      </div>
+    </div>
     <div class="offcanvas offcanvas-start" tabindex="-1" id="offcanvasRooms" aria-labelledby="offcanvasRoomsLabel">
       <div class="offcanvas-header">
         <h5 class="offcanvas-title" id="offcanvasRoomsLabel">Available rooms</h5>
@@ -20,6 +46,9 @@
       <div class="offcanvas-body">
         <div>
           Create a new room or join an existing one.
+        </div>
+        <div class="d-grid gap-2">
+          <button type="button" class="btn btn-dark" data-bs-toggle="modal" data-bs-target="#createRoomModal" data-bs-whatever="@mdo">Create</button>
         </div>
         <div id="available-rooms" class="container">
           <ul id="rooms_list"></ul>
@@ -69,7 +98,7 @@
       <div class="col-7"></div>
     </div>
   </div>
-  <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+  <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 5000">
     <div id="liveToast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
       <div class="toast-header">
         <!-- <img src="..." class="rounded me-2" alt="..."> -->
@@ -78,9 +107,7 @@
         <!-- <small>11 mins ago</small> -->
         <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
       </div>
-      <div id="toast-body" class="toast-body">
-        Hello, world! This is a toast message.
-      </div>
+      <div id="toast-body" class="toast-body"></div>
     </div>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-ka7Sk0Gln4gmtz2MlQnikT1wXgYsOg+OMhuP+IlRH9sENBO0LRn5q+8nbTov4+1p" crossorigin="anonymous"></script>

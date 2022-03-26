@@ -65,6 +65,13 @@ async function connect() {
     const data = await socket.request('getRouterRtpCapabilities');
     await loadDevice(data);
     await tryFetchingRooms();
+    const preselectedRoom = getPreselectedRoomFromCurrentLocation();
+    if(preselectedRoom) {
+      socket.emit('joinRoom', { roomId: preselectedRoom, roomName: preselectedRoom, socketId: socket.id  });
+      showToast('success', 'Connected', `You have joined room <b>${preselectedRoom}</b>`);
+      setAllButtonsStatusFromList($fsPublish, false);
+      setAllButtonsStatusFromList($fsSubscribe, false);
+    }
   });
 
   socket.on('roomsFetched', (data) => {
@@ -293,10 +300,11 @@ async function createStreamFromConsumerData(data, transport) {
 function displayRooms({ availableRooms }) {
   console.log(availableRooms);
   $roomsList.innerHTML = availableRooms.map((room) => 
-    `<li>${room} <button id="btn_connect_room-${room}" class="btn_connect_room btn btn-primary btn-sm" room-id="${room}" room-name="${room}"><i class="bi bi-door-open-fill"></i> Connect</button></li>`);
+    `<li>${room} <span><button id="btn_connect_room-${room}" class="btn_connect_room btn btn-primary btn-sm" room-id="${room}" room-name="${room}"><i class="bi bi-door-open-fill"></i> Connect</button> <button id="btn_copy_room_link-${room}" room-url="${location.href.replace(location.search, '')}?room=${room}" class="btn btn-light btn-sm" data-bs-toggle="tooltip" data-bs-placement="right" title="Copy room link"><i class="bi bi-link-45deg"></i></button></span></li>`);
   
   availableRooms.map((room) => {
     $(`#btn_connect_room-${room}`).addEventListener('click', joinRoom);
+    $(`#btn_copy_room_link-${room}`).addEventListener('click', copyRoomLink);
   }); 
 }
 
@@ -374,4 +382,16 @@ function createVideoElement() {
   newVideo.setAttribute('autoplay', true);
   newVideo.setAttribute('playsinline', true);
   return newVideo;
+}
+
+function copyRoomLink(event) {
+  const roomUrl = event.currentTarget.getAttribute('room-url');
+  navigator.clipboard.writeText(roomUrl);
+  toggleLateralMenu();
+  showToast('info', 'Copied to clipboard', `Room connection link <b>${roomUrl || ''}</b> has been copied`);
+}
+
+function getPreselectedRoomFromCurrentLocation() {
+  const params = (new URL(document.location)).searchParams;
+  return params.get("room");
 }

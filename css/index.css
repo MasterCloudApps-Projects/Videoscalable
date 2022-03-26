@@ -51,6 +51,10 @@ header {
   border: 1px solid #e3e0e0 !important;
 }
 
+#btn_webcam:hover, #btn_screen:hover, #btn_subscribe:hover {
+  background-color: #d8d9db;
+}
+
 #rooms_list {
   list-style: none;
 }
