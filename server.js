@@ -84,12 +84,13 @@ async function runSocketServer() {
 
     socket.on('joinRoom', async (data) => {
       const roomName = data.roomName;
+      const roomDescription = data.roomDescription;
       const room = RoomManager.getRoom(roomName);
 
       if(room) {
         console.log('Joining existing room %s', roomName);
       } else {
-        createRoom(roomName);
+        createRoom(roomName, roomDescription);
         console.log('Creating and joining room %s', roomName);
       }
 
@@ -99,7 +100,9 @@ async function runSocketServer() {
 
     socket.on('fetchRooms', () => {
       console.log('fetchRooms is being called');
-      socket.emit('roomsFetched', { availableRooms: RoomManager.getRoomsNames() });
+      
+      const rooms = RoomManager.getRooms();
+      socket.emit('roomsFetched', { availableRooms: Object.keys(rooms).map(key => rooms[key])});
     });
 
     socket.on('disconnect', () => {
@@ -277,7 +280,7 @@ async function runMediasoupWorker() {
   const mediaCodecs = config.mediasoup.router.mediaCodecs;
   mediasoupRouter = await worker.createRouter({ mediaCodecs });
 
-  defaultRoom = createRoom('defaultRoom');
+  defaultRoom = createRoom('defaultRoom', 'There is always a default room!');
 }
 
 async function createWebRtcTransport() {
@@ -421,8 +424,8 @@ async function createConsumer(roomName, transport, producer, rtpCapabilities) {
   };
 }
 
-function createRoom(roomName) {
-  const room = new Room(roomName);
+function createRoom(roomName, roomDescription) {
+  const room = new Room(roomName, roomDescription);
   room.router = mediasoupRouter;
   RoomManager.addRoom(room, roomName);
   return room;

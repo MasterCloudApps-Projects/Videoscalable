@@ -16,17 +16,20 @@ const $fsSubscribe = $_all('#fs_subscribe button');
 const $btnWebcam = $('#btn_webcam');
 const $btnScreen = $('#btn_screen');
 const $btnSubscribe = $('#btn_subscribe');
-const $btnCreateRoom = $('#create_new_room');
+const $btnAddRoom = $('#btn_add_room');
 const $txtWebcam = $('#webcam_status');
 const $txtScreen = $('#screen_status');
 const $txtSubscription = $('#sub_status');
-const $txtCreatedRoom = $('#txt_created_room');
 const $txtLocalDefaultEmpty = $('#local-default-empty-text');
 const $txtRemoteDefaultEmpty = $('#remote-default-empty-text');
+const $txtCurrentRoom = $('#current_room_name');
+const $txtCurrentDescription = $('#current_room_description');
 const $roomsList = $('#rooms_list');
-const $inputRoomName = $('#input_room_name');
+const $inputRoomName = $('#room_name');
+const $inputRoomDescription = $('#room_description');
 const $localDiv = $('#local');
 const $remoteDiv = $('#remote');
+const $createRoomModal = $('#createRoomModal');
 let $txtPublish;
 
 $btnWebcam.addEventListener('click', publish);
@@ -72,6 +75,7 @@ async function connect() {
       setAllButtonsStatusFromList($fsPublish, false);
       setAllButtonsStatusFromList($fsSubscribe, false);
     }
+    $btnAddRoom.addEventListener('click', () => addRoom(socket));
   });
 
   socket.on('roomsFetched', (data) => {
@@ -297,20 +301,24 @@ async function createStreamFromConsumerData(data, transport) {
   return stream;
 }
 
-function displayRooms({ availableRooms }) {
-  console.log(availableRooms);
-  $roomsList.innerHTML = availableRooms.map((room) => 
-    `<li>${room} <span><button id="btn_connect_room-${room}" class="btn_connect_room btn btn-primary btn-sm" room-id="${room}" room-name="${room}"><i class="bi bi-door-open-fill"></i> Connect</button> <button id="btn_copy_room_link-${room}" room-url="${location.href.replace(location.search, '')}?room=${room}" class="btn btn-light btn-sm" data-bs-toggle="tooltip" data-bs-placement="right" title="Copy room link"><i class="bi bi-link-45deg"></i></button></span></li>`);
-  
+function displayRooms({ availableRooms }) {  
+  availableRooms.forEach((room) => {
+    $roomsList.innerHTML += `<li>${room.name} <span>
+      <button id="btn_connect_room-${room.name}" class="btn_connect_room btn btn-primary btn-sm" room-id="${room.name}" room-name="${room.name}" room-description="${room.description}"><i class="bi bi-door-open-fill"></i> Connect</button>
+      <button id="btn_copy_room_link-${room.name}" room-url="${location.href.replace(location.search, '')}?room=${room.name}" class="btn btn-light btn-sm" data-bs-toggle="tooltip" data-bs-placement="right" title="Copy room link"><i class="bi bi-link-45deg"></i></button></span></li>`;
+  });
+    
+
   availableRooms.map((room) => {
-    $(`#btn_connect_room-${room}`).addEventListener('click', joinRoom);
-    $(`#btn_copy_room_link-${room}`).addEventListener('click', copyRoomLink);
+    $(`#btn_connect_room-${room.name}`).addEventListener('click', joinRoom);
+    $(`#btn_copy_room_link-${room.name}`).addEventListener('click', copyRoomLink);
   }); 
 }
 
 async function joinRoom(event) {
   const roomId = event.target.getAttribute('room-id');
   const roomName = event.target.getAttribute('room-name');
+  const roomDescription = event.target.getAttribute('room-description');
   const roomButton = $(`#btn_connect_room-${roomId}`);
 
   if(socket) {
@@ -320,6 +328,7 @@ async function joinRoom(event) {
     toggleLateralMenu();
     showToast('success', 'Connected', `You have joined room <b>${roomName}</b>`);
     roomButton.disabled = true;
+    setCurrentRoom({ roomName, roomDescription });
   } else {
     console.error(`Socket is not available and cannot connect to room ${roomName}`);
     showToast('error', 'Could not connect', `An error happened while trying to join the room <b>${roomName}</b>`);
@@ -364,6 +373,20 @@ function toggleLateralMenu() {
   }
 }
 
+function toggleCreateRoomModal() {
+  const isCreateRoomModalActive = $createRoomModal.classList.contains('show');
+  const offcanvasBackdrop = $('.offcanvas-backdrop');
+  const modalBackdrop = $('.modal-backdrop');
+  
+  if(isCreateRoomModalActive) {
+    $createRoomModal.classList.remove("show");
+    offcanvasBackdrop.parentElement.removeChild(offcanvasBackdrop);
+    modalBackdrop.parentElement.removeChild(modalBackdrop);
+  } else {
+    $createRoomModal.classList.add("show");
+  }
+}
+
 async function createVideoAndAwait(stream) {
   const newVideo = createVideoElement();
   newVideo.srcObject = await stream;
@@ -394,4 +417,21 @@ function copyRoomLink(event) {
 function getPreselectedRoomFromCurrentLocation() {
   const params = (new URL(document.location)).searchParams;
   return params.get("room");
+}
+
+function addRoom(socket) {
+  const roomName = $inputRoomName.value;
+  const roomDescription = $inputRoomDescription.value;
+  socket.emit('joinRoom', { roomId: roomName, roomName, roomDescription, socketId: socket.id  });
+  setCurrentRoom({ roomName, roomDescription });
+  showToast('success', 'Connected', `You have joined room <b>${roomName}</b>`);
+  setAllButtonsStatusFromList($fsPublish, false);
+  setAllButtonsStatusFromList($fsSubscribe, false);
+  toggleLateralMenu();
+  toggleCreateRoomModal();
+}
+
+function setCurrentRoom({ roomName, roomDescription }) {
+  $txtCurrentRoom.innerHTML = roomName;
+  $txtCurrentDescription.innerHTML = roomDescription;
 }
