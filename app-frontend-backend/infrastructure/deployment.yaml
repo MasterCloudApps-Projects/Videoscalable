@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-frontend-backend-deployment
+  labels:
+    app: app-frontend-backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app-frontend-backend
+  template:
+    metadata:
+      labels:
+        app: app-frontend-backend
+    spec:
+      hostNetwork: true
+      restartPolicy: Always
+      imagePullSecrets:
+        - name: regcred
+      containers:
+      - name: app-frontend-backend
+        image: franrobles8/app-frontend-backend:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+        
