@@ -279,7 +279,6 @@ async function runMediasoupWorker() {
 
   const mediaCodecs = config.mediasoup.router.mediaCodecs;
   mediasoupRouter = await worker.createRouter({ mediaCodecs });
-
   defaultRoom = createRoom('defaultRoom', 'There is always a default room!');
 }
 

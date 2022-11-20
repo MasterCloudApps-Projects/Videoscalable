@@ -127,6 +127,8 @@ async function publish(e) {
   }
 
   const transport = device.createSendTransport(data);
+  console.log('transport');
+  console.log(transport);
   transport.on('connect', async ({ dtlsParameters }, callback, errback) => {
     socket.request('connectProducerTransport', { dtlsParameters })
       .then(callback)
